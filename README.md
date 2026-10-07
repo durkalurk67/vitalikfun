@@ -11,7 +11,7 @@ A casino launchpad on Solana. Creators launch coins on pump.fun from Housepad, a
 | `public/index.html` | The whole website: launch a coin, play Plinko, Slots or Crash, feed coins, run payouts, claim, and the owner tools. |
 | `api/` | A small server (Vercel functions) for launching coins. It uploads the image to pump.fun, then builds the launch transactions. The creator's wallet signs and pays; the server only signs as the brand-new coin's address. Adapted from the Shopi-fi launcher. |
 | `package.json`, `vercel.json`, `env.example` | Vercel setup. |
-| `program/lib.rs` | The on-chain program (plain `solana_program`, about 180 KB). Holds the bankroll, mints house shares, takes and settles bets, runs payouts, pays coins, and has the owner fail-safe. |
+| `program/lib.rs` | The on-chain program (plain `solana_program`, about 190 KB). Holds the bankroll, mints house shares, takes and settles bets, runs payouts, pays coins, and has the owner fail-safe. |
 | `anchor/lib.rs` | Reference copy of the same program written with Anchor. It has the same accounts and instructions, but no fail-safe, and it's about twice the size. It isn't deployed. |
 | `RECOVERY.md` | Step-by-step instructions for the owner if anything goes wrong. |
 
@@ -22,7 +22,7 @@ Nothing in this repo is secret. Never commit seed phrases, private keys, wallet 
 On the site, **Launch a coin** takes a name, ticker, image and description, then does everything in two wallet approvals:
 
 1. **Creates the coin on pump.fun** with the creator's wallet as creator. A dev buy is optional.
-2. **Registers it with Housepad in the same transaction**, so a coin can only join the casino at its own launch, and nobody can squat on someone else's coin.
+2. **Registers it with Housepad in the same transaction.** The coin's own address has to sign, and the program checks that the coin really exists on pump.fun, so a coin can only join the casino at its own launch, nobody can squat on someone else's coin, and made-up coins can't get in.
 3. **Locks the creator-fee split on pump.fun.** By default it's 10% to the Housepad treasury, 40% to the coin's casino stake, and 50% to the creator. The creator can raise the casino stake, but it can't go below 20%. pump.fun only lets the split be set once, so it's permanent.
 
 Every trade of the coin then pays creator fees, and part of them goes to the coin's casino stake. Anyone can trigger pump.fun's fee payout. Then **Move creator fees into the house** on the coin's card turns that SOL into more house shares.
@@ -30,10 +30,10 @@ Every trade of the coin then pays creator fees, and part of them goes to the coi
 ## How the money moves
 
 1. **A coin buys into the house.** Its share of pump.fun creator fees lands at its casino-stake address and gets moved into the bankroll. Anyone can also feed SOL in a coin's name. Either way the SOL joins the bankroll, and the coin gets house shares at the current share price.
-2. **Players bet SOL at shared tables.** The house only takes a bet if its biggest possible win fits under the per-bet limit, which is 2% of the free bankroll.
+2. **Players bet SOL at shared tables.** The house only takes a bet if its biggest possible win fits under the per-bet limit, which is 2% of the free bankroll. So the biggest bet on a 1,489× Plinko option is tiny until the bankroll is large; the site shows the current limit for each option and says what bankroll an option needs before it opens.
 3. **Results.** Each bet's result comes from the hash of the first Solana slot after the bet, mixed with the player's own seed and the bet's address. Anyone can settle a bet. A bet that sits unsettled for about 3 minutes counts as a loss.
 4. **Payout.** When the payout timer is up, anyone can run the payout. Profit above the payout line is split: 10% to the Housepad treasury and 90% to coins by share. The payout never touches SOL that open bets could still win.
-5. **Claim.** Anyone can send a coin's earned profit to that coin's buyback wallet, which buys the coin back and burns it or pays stakers.
+5. **Claim.** Anyone can send a coin's earned profit to that coin's buyback wallet. What that wallet does with it (buy back and burn, pay holders) is the creator's promise, shown on the coin's card as its buyback plan; the program doesn't enforce it.
 6. **Table sponsorship.** Feeds also count toward a race at each table. Scores halve every 12 hours, and the leader's art goes on the felt.
 
 ## Game returns
@@ -46,12 +46,19 @@ The website and the program compute results the same way. That was checked on 5,
 | Slots | 97.9% | 2.1% |
 | Crash (any cash-out) | 99.0% | 1.0% |
 
+## What's been checked
+
+- The payout only ever pays out profit that no open bet could still win, and a coin can never claim more than the house owes it. A random-play model (400 runs of mixed feeds, bets, payouts, claims and owner withdrawals) never found the books out of balance or a player's stake missing.
+- A bet always settles, even after the owner has withdrawn: the win is capped at whatever bankroll is left, and the stake always comes back from escrow first.
+- Only real pump.fun coins can join, only at launch, and the house can only be created with its fixed settings.
+- The site sends transactions straight from the browser to Solana. There's no relay to abuse, and the server's RPC key is never sent to the page.
+
 ## Owner fail-safe
 
-The owner wallet is written into the program. It's the house admin and the treasury from the moment the house exists. It's also the program's upgrade authority. With it, you can:
+The owner wallet is written into the program. It's the house admin and the treasury from the moment the house exists, and the house is always created with the same fixed settings (hourly payouts, 2% max win, 10% Housepad cut) no matter who pays to create it. The owner wallet is also the program's upgrade authority. With it, you can:
 
 - **Pause.** Stops new bets, feeds and fee sweeps. Settling, payouts and claims keep working.
-- **Emergency withdraw.** Only while paused. Sends SOL out of the house to any wallet.
+- **Emergency withdraw.** Only while paused. Sends SOL out of the house to any wallet, from the bankroll first and then unclaimed coin profit. Players' stakes on open bets are never touched, and the house keeps working afterwards.
 - **Change settings.** Payout interval, max win per bet, the Housepad cut, and the treasury wallet.
 - **Hand over admin.** Moves the house admin role to another wallet.
 - **Upgrade or close the program.** Closing returns its ~0.98 SOL storage deposit.

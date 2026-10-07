@@ -11,9 +11,9 @@ Nobody else can do either. Keep your wallet's seed phrase safe, because it's the
 
 1. Open the Housepad site and click **Connect wallet** with your owner wallet. An **Owner tools** panel appears at the top. Nobody else sees it.
 2. **Pause.** Click **Pause**. New bets, feeds and creator-fee sweeps stop. Bets already placed can still settle, and payouts and coin claims keep working. Click **Resume** to reopen.
-3. **Withdraw.** While paused, leave the amount empty and click **Withdraw** to send everything in the house to your wallet. You can also type an amount. The SOL comes out of the bankroll first, then any coin profit not yet claimed, then the stakes of bets that haven't settled.
-   - **Withdrawing everything shuts the house for good.** Once the bankroll is empty, it can't take feeds or bets again, even after you resume. To reopen after that, you'd upload a new version of the program. A partial withdrawal leaves the house usable.
-4. **Close the program.** This is only needed if you're shutting down for good. Once the house is empty, click **Close program** and confirm. The program's deposit, about 0.98 SOL, goes back to your wallet. This can't be undone, and that program address can never be used again.
+3. **Withdraw.** While paused, leave the amount empty and click **Withdraw** to send everything in the house to your wallet. You can also type an amount. The SOL comes out of the bankroll first, then any coin profit not yet claimed. Players' stakes on bets that haven't settled yet are never touched; those bets still settle normally, and a winner is paid from whatever bankroll is left.
+   - Withdrawing everything doesn't break the house. Once you resume, coins can feed it again and the share price picks up from where it was.
+4. **Close the program.** This is only needed if you're shutting down for good. Once the house is empty (no bankroll, no unclaimed coin profit, no open bets), click **Close program** and confirm. The program's deposit, about 0.98 SOL, goes back to your wallet. This can't be undone, and that program address can never be used again.
 
 Each step is one transaction that you approve in your wallet. It costs a fraction of a cent.
 

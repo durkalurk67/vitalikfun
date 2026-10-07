@@ -31,6 +31,13 @@ entrypoint!(process_instruction);
 const ADMIN_BYTES: [u8; 32] = [166, 41, 160, 134, 191, 8, 2, 105, 6, 13, 166, 155, 79, 57, 249, 219, 149, 38, 21, 59, 54, 17, 210, 206, 10, 184, 214, 105, 249, 231, 207, 239];
 fn admin() -> Pubkey { Pubkey::new_from_array(ADMIN_BYTES) }
 
+/// pump.fun's program. A coin can only join the casino if its pump.fun bonding curve exists.
+const PUMP_PROGRAM: Pubkey = Pubkey::new_from_array([1, 86, 224, 246, 147, 102, 90, 207, 68, 219, 21, 104, 191, 23, 91, 170, 81, 137, 203, 151, 245, 210, 255, 59, 101, 93, 43, 182, 253, 109, 24, 176]);
+/// House settings on day one. The owner can change them later with set_params.
+const DEFAULT_PAYOUT_INTERVAL: i64 = 3600;
+const DEFAULT_MAX_PROFIT_BPS: u16 = 200;
+const DEFAULT_PLATFORM_FEE_BPS: u16 = 1000;
+
 const SCALE: u128 = 1_000_000_000_000;
 const NUM_TABLES: u8 = 8;
 const HALF_LIFE: i64 = 12 * 3600;
@@ -97,7 +104,7 @@ const BET_SPACE: usize = 8 + 105;
 /* ---------------- errors (Anchor-style codes and messages) ---------------- */
 
 #[derive(Clone, Copy)]
-enum HpError { BadParam = 0, BadTable, TooLong, ZeroAmount, GameNotOnTable, BetOutOfRange, OverMaxWin, TooEarly, BadSysvar, Math, BadAccount, Paused, NotOwner, NotPaused, Emptied }
+enum HpError { BadParam = 0, BadTable, TooLong, ZeroAmount, GameNotOnTable, BetOutOfRange, OverMaxWin, TooEarly, BadSysvar, Math, BadAccount, Paused, NotOwner, NotPaused, NotPumpCoin }
 
 fn fail(e: HpError) -> ProgramError {
     sol_log(match e {
@@ -115,7 +122,7 @@ fn fail(e: HpError) -> ProgramError {
         HpError::Paused => "Error Message: The house is paused",
         HpError::NotOwner => "Error Message: Only the house owner can do this",
         HpError::NotPaused => "Error Message: Pause the house before withdrawing",
-        HpError::Emptied => "Error Message: The owner emptied this house, so it can't take new feeds",
+        HpError::NotPumpCoin => "Error Message: Only coins launched on pump.fun can join the casino",
     });
     ProgramError::Custom(6000 + e as u32)
 }
@@ -378,7 +385,7 @@ fn check_params(payout_interval: i64, max_profit_bps: u16, platform_fee_bps: u16
     Ok(())
 }
 
-fn initialize(pid: &Pubkey, accounts: &[AccountInfo], payout_interval: i64, max_profit_bps: u16, platform_fee_bps: u16) -> ProgramResult {
+fn initialize(pid: &Pubkey, accounts: &[AccountInfo], _payout_interval: i64, _max_profit_bps: u16, _platform_fee_bps: u16) -> ProgramResult {
     let it = &mut accounts.iter();
     let house = next_account_info(it)?;
     let payer = next_account_info(it)?;
@@ -386,7 +393,8 @@ fn initialize(pid: &Pubkey, accounts: &[AccountInfo], payout_interval: i64, max_
     let sys = next_account_info(it)?;
     signer(payer)?;
     system(sys)?;
-    check_params(payout_interval, max_profit_bps, platform_fee_bps)?;
+    // whoever pays to create the house gets no say in its settings: fixed defaults, owner-adjustable later
+    let (payout_interval, max_profit_bps, platform_fee_bps) = (DEFAULT_PAYOUT_INTERVAL, DEFAULT_MAX_PROFIT_BPS, DEFAULT_PLATFORM_FEE_BPS);
     let (key, bump) = Pubkey::find_program_address(&[b"house"], pid);
     require!(&key == house.key, HpError::BadAccount);
     create_pda(payer, house, sys, HOUSE_SPACE, pid, &[b"house", &[bump]])?;
@@ -441,11 +449,15 @@ fn register_coin(pid: &Pubkey, accounts: &[AccountInfo], name: &[u8], symbol: &[
     let creator = next_account_info(it)?;
     let sys = next_account_info(it)?;
     let intake = next_account_info(it)?;
+    let curve = next_account_info(it)?;
     signer(creator)?;
     // the new coin's mint key must sign, so a coin can only be registered as part of its own launch
     signer(mint)?;
     system(sys)?;
     House::load(house, pid)?;
+    // and the coin must really exist on pump.fun: its bonding curve is created earlier in the same transaction
+    let (curve_key, _) = Pubkey::find_program_address(&[b"bonding-curve", mint.key.as_ref()], &PUMP_PROGRAM);
+    require!(&curve_key == curve.key && curve.owner == &PUMP_PROGRAM && !curve.data_is_empty(), HpError::NotPumpCoin);
     require!(name.len() <= 32 && symbol.len() <= 13 && uri.len() <= 200, HpError::TooLong);
     require!(burn_bps <= 10_000, HpError::BadParam);
     require!(home_table < NUM_TABLES, HpError::BadTable);
@@ -595,7 +607,9 @@ fn settle_bet(pid: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
 
     let current = Clock::get()?.slot;
     require!(current > bet.slot + 1, HpError::TooEarly);
-    let mut found: Option<[u8; 32]> = None;
+    // SlotHashes lists recent slots newest first. The result slot is the first slot after the bet's
+    // that produced a block. If that slot has already left the window, the bet expired (a loss).
+    let mut found: Option<([u8; 32], u64)> = None;
     let mut expired = true;
     {
         let data = hashes.try_borrow_data()?;
@@ -606,13 +620,16 @@ fn settle_bet(pid: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
             if off + 40 > data.len() { break; }
             let s = u64::from_le_bytes(data[off..off + 8].try_into().unwrap());
             if s > bet.slot {
-                found = Some(data[off + 8..off + 40].try_into().unwrap());
+                found = Some((data[off + 8..off + 40].try_into().unwrap(), s));
             } else {
                 expired = false;
                 break;
             }
         }
     }
+    // the window's oldest entry being the very next slot also proves nothing was skipped
+    if let Some((_, s)) = found { if s == bet.slot + 1 { expired = false; } }
+    let found = found.map(|(hsh, _)| hsh);
     let (payout, roll) = match (found, expired) {
         (Some(sh), false) => {
             let r = hashv(&[&sh, &bet.client_seed, bet_ai.key.as_ref()]).to_bytes();
@@ -629,7 +646,9 @@ fn settle_bet(pid: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     h.escrow -= back;
     h.liability = h.liability.saturating_sub(bet.max_payout.saturating_sub(amount));
     h.bankroll = h.bankroll.checked_add(back).ok_or_else(math)?;
-    h.bankroll = h.bankroll.checked_sub(payout).ok_or_else(math)?;
+    // in normal operation bankroll always covers the payout (see place_bet); the cap only matters after an owner withdrawal
+    let payout = payout.min(h.bankroll);
+    h.bankroll -= payout;
     h.save(house)?;
     if payout > 0 {
         move_lamports(house, player, payout)?;
@@ -725,8 +744,9 @@ fn set_paused(pid: &Pubkey, accounts: &[AccountInfo], paused: bool) -> ProgramRe
 }
 
 /// Owner only, and only while paused. Sends SOL from the house to any wallet.
-/// `amount` 0 means everything above the house account's own rent deposit.
-/// It comes out of the bankroll first, then coin profits not yet claimed, then stakes of open bets.
+/// `amount` 0 means everything the house holds for itself and coins. Players' stakes on open bets are
+/// never touched, so every open bet can still be settled and refunded.
+/// It comes out of the bankroll first, then coin profits not yet claimed.
 fn emergency_withdraw(pid: &Pubkey, accounts: &[AccountInfo], amount: u64) -> ProgramResult {
     let it = &mut accounts.iter();
     let house = next_account_info(it)?;
@@ -736,13 +756,13 @@ fn emergency_withdraw(pid: &Pubkey, accounts: &[AccountInfo], amount: u64) -> Pr
     let mut h = House::load(house, pid)?;
     require!(&h.authority == authority.key, HpError::NotOwner);
     require!(h.paused, HpError::NotPaused);
-    let available = house.lamports().saturating_sub(Rent::get()?.minimum_balance(house.data_len()));
+    let spare = house.lamports().saturating_sub(Rent::get()?.minimum_balance(house.data_len())).saturating_sub(h.escrow);
+    let available = spare.min(h.bankroll.saturating_add(h.owed));
     let amount = if amount == 0 { available } else { amount.min(available) };
     require!(amount > 0, HpError::ZeroAmount);
     let mut left = amount;
     let from_bank = left.min(h.bankroll); h.bankroll -= from_bank; left -= from_bank;
-    let from_owed = left.min(h.owed); h.owed -= from_owed; left -= from_owed;
-    let from_escrow = left.min(h.escrow); h.escrow -= from_escrow;
+    let from_owed = left.min(h.owed); h.owed -= from_owed;
     h.liability = h.liability.min(h.bankroll);
     h.save(house)?;
     move_lamports(house, to, amount)?;
@@ -855,9 +875,9 @@ fn decay(score: u64, dt: i64) -> u64 {
 /// Mints shares for a coin at the current share price and updates the table race.
 fn credit_feed(h: &mut House, c: &mut Coin, t: &mut Table, amount: u64, now: i64) -> Result<u128, ProgramError> {
     accrue(h, c);
-    let nav = if h.total_shares == 0 { h.hwm_nav } else { h.bankroll as u128 * SCALE / h.total_shares };
-    // a house whose bankroll was fully withdrawn has worthless shares outstanding; it stays shut
-    require!(nav > 0, HpError::Emptied);
+    // shares are priced at the current value per share, never below 0.1% of the payout line (so a
+    // near-wiped-out house can't be diluted to nothing); with an empty bankroll they're priced at the line
+    let nav = if h.total_shares == 0 || h.bankroll == 0 { h.hwm_nav } else { (h.bankroll as u128 * SCALE / h.total_shares).max(h.hwm_nav / 1000) };
     let shares = amount as u128 * SCALE / nav;
     h.bankroll = h.bankroll.checked_add(amount).ok_or_else(math)?;
     h.total_shares = h.total_shares.checked_add(shares).ok_or_else(math)?;
