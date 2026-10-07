@@ -91,7 +91,7 @@ const EV_AUTHORITY_CHANGED: [u8; 8] = [31, 19, 174, 152, 4, 82, 215, 226];
 // Account sizes, identical to the Anchor build (8-byte discriminator + fields)
 const HOUSE_SPACE: usize = 8 + 206; // Anchor layout + a trailing `paused` byte
 const TABLE_SPACE: usize = 8 + 378;
-const COIN_SPACE: usize = 8 + 410;
+const COIN_SPACE: usize = 8 + 413; // symbol up to 13 characters, like pump.fun
 const BET_SPACE: usize = 8 + 105;
 
 /* ---------------- errors (Anchor-style codes and messages) ---------------- */
@@ -440,10 +440,13 @@ fn register_coin(pid: &Pubkey, accounts: &[AccountInfo], name: &[u8], symbol: &[
     let buyback = next_account_info(it)?;
     let creator = next_account_info(it)?;
     let sys = next_account_info(it)?;
+    let intake = next_account_info(it)?;
     signer(creator)?;
+    // the new coin's mint key must sign, so a coin can only be registered as part of its own launch
+    signer(mint)?;
     system(sys)?;
     House::load(house, pid)?;
-    require!(name.len() <= 32 && symbol.len() <= 10 && uri.len() <= 200, HpError::TooLong);
+    require!(name.len() <= 32 && symbol.len() <= 13 && uri.len() <= 200, HpError::TooLong);
     require!(burn_bps <= 10_000, HpError::BadParam);
     require!(home_table < NUM_TABLES, HpError::BadTable);
     let (key, bump) = Pubkey::find_program_address(&[b"coin", mint.key.as_ref()], pid);
@@ -454,6 +457,14 @@ fn register_coin(pid: &Pubkey, accounts: &[AccountInfo], name: &[u8], symbol: &[
         shares: 0, debt: 0, claimable: 0, fed_total: 0, claimed_total: 0,
         name: name.to_vec(), symbol: symbol.to_vec(), uri: uri.to_vec(), bump,
     }.save(coin)?;
+    // open the coin's fee-intake address with its rent deposit, so pump.fun can pay creator fees into it
+    let (fees_key, _) = Pubkey::find_program_address(&[b"fees", mint.key.as_ref()], pid);
+    require!(&fees_key == intake.key && intake.owner == &system_program::ID, HpError::BadAccount);
+    let floor = Rent::get()?.minimum_balance(0);
+    if intake.lamports() < floor {
+        invoke(&system_instruction::transfer(creator.key, intake.key, floor - intake.lamports()),
+            &[creator.clone(), intake.clone(), sys.clone()])?;
+    }
     Out::new(&EV_COIN_REGISTERED).pk(mint.key).pk(creator.key).emit();
     Ok(())
 }
@@ -500,7 +511,8 @@ fn sweep_fees(pid: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let mut t = Table::load(table, pid, c.home_table)?;
     let (key, bump) = Pubkey::find_program_address(&[b"fees", c.mint.as_ref()], pid);
     require!(&key == intake.key && intake.owner == &system_program::ID, HpError::BadAccount);
-    let amount = intake.lamports();
+    // always leave the rent deposit, so the intake stays open for pump.fun's next payout
+    let amount = intake.lamports().saturating_sub(Rent::get()?.minimum_balance(0));
     require!(amount > 0, HpError::ZeroAmount);
     invoke_signed(&system_instruction::transfer(intake.key, house.key, amount),
         &[intake.clone(), house.clone(), sys.clone()], &[&[b"fees", c.mint.as_ref(), &[bump]]])?;

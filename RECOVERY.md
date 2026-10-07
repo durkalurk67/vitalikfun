@@ -3,7 +3,7 @@
 Your wallet controls the casino in two ways:
 
 - **House admin.** This is built into the program. You can pause the casino and pull SOL out of it.
-- **Program owner** (Solana calls this the *upgrade authority*). You can upgrade the program, or close it and get its storage deposit back (about 0.94 SOL).
+- **Program owner** (Solana calls this the *upgrade authority*). You can upgrade the program, or close it and get its storage deposit back (about 0.98 SOL).
 
 Nobody else can do either. Keep your wallet's seed phrase safe, because it's the only key to all of this.
 
@@ -13,7 +13,7 @@ Nobody else can do either. Keep your wallet's seed phrase safe, because it's the
 2. **Pause.** Click **Pause**. New bets, feeds and creator-fee sweeps stop. Bets already placed can still settle, and payouts and coin claims keep working. Click **Resume** to reopen.
 3. **Withdraw.** While paused, leave the amount empty and click **Withdraw** to send everything in the house to your wallet. You can also type an amount. The SOL comes out of the bankroll first, then any coin profit not yet claimed, then the stakes of bets that haven't settled.
    - **Withdrawing everything shuts the house for good.** Once the bankroll is empty, it can't take feeds or bets again, even after you resume. To reopen after that, you'd upload a new version of the program. A partial withdrawal leaves the house usable.
-4. **Close the program.** This is only needed if you're shutting down for good. Once the house is empty, click **Close program** and confirm. The program's deposit, about 0.94 SOL, goes back to your wallet. This can't be undone, and that program address can never be used again.
+4. **Close the program.** This is only needed if you're shutting down for good. Once the house is empty, click **Close program** and confirm. The program's deposit, about 0.98 SOL, goes back to your wallet. This can't be undone, and that program address can never be used again.
 
 Each step is one transaction that you approve in your wallet. It costs a fraction of a cent.
 
@@ -21,11 +21,11 @@ Each step is one transaction that you approve in your wallet. It costs a fractio
 
 ## If the site is down or gone
 
-The site is a single file, `index.html`. Your SOL lives on Solana, not on the site, so all you need to do is put the file back online:
+The site is `public/index.html`. Your SOL lives on Solana, not on the site. The owner tools need only that one file, so all you need to do is put it back online:
 
 - **Vercel:** create a project from the GitHub repo and click Deploy, the same way as before.
-- **GitHub Pages** (free, no other account needed): in the repo, go to **Settings → Pages**. Under *Branch*, pick `main` and `/ (root)` and click Save. After a minute or two the site is at `https://<your-username>.github.io/<repo-name>/`. This needs `index.html` at the top level of the repo.
-- **Netlify Drop:** drag the folder holding `index.html` onto app.netlify.com/drop.
+- **GitHub Pages** (free): make a small separate repo containing just `index.html`, a copy of `public/index.html`. Go to **Settings → Pages**, pick branch `main` and `/ (root)`, and click Save. After a minute or two the site is at `https://<your-username>.github.io/<repo-name>/`. Launching coins won't work there, but the owner tools will.
+- **Netlify Drop:** drag the `public` folder onto app.netlify.com/drop.
 
 Then follow the steps above. Wallet extensions don't work on a file opened straight from your computer, so it has to be on a web address.
 

@@ -1,8 +1,12 @@
-# Never commit keys or wallet exports
-*.json
+# Never commit keys, wallet exports or secrets
 id.json
-*keypair*
+*keypair*.json
+*-wallet.json
+wallet*.json
 *.key
 .env
 .env.*
+!env.example
+node_modules/
+.vercel/
 .DS_Store
