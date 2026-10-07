@@ -1,0 +1,8 @@
+# Never commit keys or wallet exports
+*.json
+id.json
+*keypair*
+*.key
+.env
+.env.*
+.DS_Store
